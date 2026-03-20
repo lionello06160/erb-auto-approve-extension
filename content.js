@@ -62,6 +62,7 @@
   let debugEnabled = false;
   let scanQueued = false;
   let lastScanSummary = "";
+  let lastSkipSignature = "";
   let pollTimerId = null;
 
   const log = (type, message, details) => {
@@ -86,6 +87,16 @@
       : "";
     const text = getButtonText(el);
     return `${tag}${id}${classes}${text ? ` "${text}"` : ""}`;
+  };
+
+  const logSkipOnce = (reason, el) => {
+    const signature = `${reason}|${describeNode(el)}`;
+    if (signature === lastSkipSignature) {
+      return;
+    }
+
+    lastSkipSignature = signature;
+    log("skip", `Target blocked: ${reason}`, describeNode(el));
   };
 
   const storageGet = (keys) => new Promise((resolve) => {
@@ -265,20 +276,20 @@
     return /confirm|approve|ok|yes|continue|submit|start/i.test(id);
   };
 
-  const findByExactText = (root, regex) => {
+  const findByExactText = (root, regex, predicate = () => true) => {
     const nodes = root.querySelectorAll("a, button, input[type='button'], input[type='submit'], div[role='button']");
-    return Array.from(nodes).find((node) => regex.test(getButtonText(node)));
+    return Array.from(nodes).find((node) => regex.test(getButtonText(node)) && predicate(node));
   };
 
   const findApproveAllButton = (root = document) => {
     for (const selector of APPROVE_ALL_SELECTORS) {
       const el = root.querySelector(selector);
-      if (el) {
+      if (el && isVisible(el) && !isDisabled(el)) {
         return el;
       }
     }
 
-    return findByExactText(root, RX_APPROVE_ALL);
+    return findByExactText(root, RX_APPROVE_ALL, (node) => isVisible(node) && !isDisabled(node));
   };
 
   const findAutoConfirmButton = (root = document) => {
@@ -390,7 +401,7 @@
 
     const lastClickedAt = clickedAt.get(el) || 0;
     if (Date.now() - lastClickedAt < CLICK_COOLDOWN_MS) {
-      log("skip", "Target skipped due to cooldown", describeNode(el));
+      logSkipOnce("cooldown", el);
       return false;
     }
 
@@ -404,11 +415,12 @@
     } else if (isSafeTarget(el)) {
       actionKind = "approve";
     } else {
-      log("skip", `Target blocked: ${getBlockedReason(el)}`, describeNode(el));
+      logSkipOnce(getBlockedReason(el), el);
       return false;
     }
 
     clickedAt.set(el, Date.now());
+    lastSkipSignature = "";
     el.click();
     log("click", `Clicked ${actionKind}`, describeNode(el));
     await updateLastApprovedAt();
@@ -424,7 +436,7 @@
     const dialogs = getVisibleDialogs(root);
     const dialogButton = findDialogActionButton(root);
     const approveAll = findApproveAllButton(root);
-    const approve = findByExactText(root, RX_APPROVE);
+    const approve = findByExactText(root, RX_APPROVE, (node) => isVisible(node) && !isDisabled(node));
     const summary = [
       `dialogs=${dialogs.length}`,
       `dialogAction=${describeNode(dialogButton)}`,
