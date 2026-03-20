@@ -16,6 +16,7 @@
   const RX_APPROVE_ALL = /^approve\s*all$/i;
   const RX_APPROVE = /^approve$/i;
   const CLICK_COOLDOWN_MS = 1500;
+  const ACTION_SETTLE_MS = 5000;
   const RESCAN_EVENTS = ["focus", "pageshow", "online", "resume"];
   const clickedAt = new WeakMap();
   const AUTO_CONFIRM_SELECTORS = [
@@ -29,6 +30,12 @@
   ];
   const APPROVE_ALL_SELECTORS = [
     "#mtaApproveAll"
+  ];
+  const APPROVAL_PAGE_SELECTORS = [
+    "#mtaApproveAll",
+    "#lblWaitingApprove",
+    ".Section.waiting",
+    "table.columnar_data"
   ];
   const SAFE_DIALOG_ACTION_PATTERNS = [
     /^confirm$/i,
@@ -63,6 +70,7 @@
   let scanQueued = false;
   let lastScanSummary = "";
   let lastSkipSignature = "";
+  let actionPauseUntil = 0;
   let pollTimerId = null;
 
   const log = (type, message, details) => {
@@ -108,6 +116,8 @@
   });
 
   const isTopWindow = () => window.top === window;
+
+  const isApprovalPage = (root = document) => APPROVAL_PAGE_SELECTORS.some((selector) => root.querySelector(selector));
 
   const formatTimestamp = (isoString) => {
     if (!isoString) return "-";
@@ -421,6 +431,7 @@
 
     clickedAt.set(el, Date.now());
     lastSkipSignature = "";
+    actionPauseUntil = Date.now() + ACTION_SETTLE_MS;
     el.click();
     log("click", `Clicked ${actionKind}`, describeNode(el));
     await updateLastApprovedAt();
@@ -430,6 +441,14 @@
   const attempt = async (root = document) => {
     if (!enabled) {
       log("scan", "Attempt skipped because extension is disabled");
+      return;
+    }
+
+    if (!isApprovalPage(root)) {
+      return;
+    }
+
+    if (Date.now() < actionPauseUntil) {
       return;
     }
 
@@ -542,6 +561,9 @@
     }
 
     if (message.type === "erb-scan-now") {
+      if (!isApprovalPage(document)) {
+        return;
+      }
       log("state", `Received external scan request from ${message.source || "unknown"}`);
       queueAttempt(`message-${message.source || "external"}`);
     }
